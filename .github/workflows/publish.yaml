@@ -17,7 +17,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   publish:
@@ -28,6 +27,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+
+      # Registry names must be lowercase, and the org is not: Vertama-GmbH.
+      # Derived rather than hardcoded, so a repository rename carries through.
+      - name: Lowercase the image name
+        id: img
+        run: echo "name=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -50,8 +55,8 @@ jobs:
           platforms: linux/amd64
           provenance: false
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}
-            ${{ inputs.latest && format('{0}/{1}:latest', env.REGISTRY, env.IMAGE_NAME) || '' }}
+            ${{ env.REGISTRY }}/${{ steps.img.outputs.name }}:${{ inputs.image_tag }}
+            ${{ inputs.latest && format('{0}/{1}:latest', env.REGISTRY, steps.img.outputs.name) || '' }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -62,7 +67,7 @@ jobs:
       - name: Summary
         run: |
           {
-            echo "Published \`${REGISTRY}/${IMAGE_NAME}:${{ inputs.image_tag }}\`"
+            echo "Published \`${REGISTRY}/${{ steps.img.outputs.name }}:${{ inputs.image_tag }}\`"
             echo ""
             echo "- built from commit \`${{ github.sha }}\`"
             echo "- pinned libraries: see [package.json](package.json)"
