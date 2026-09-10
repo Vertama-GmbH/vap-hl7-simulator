@@ -41,6 +41,34 @@ without a lockfile.
 |---|---|---|
 | `HL7_PORT` | `3000` | port to listen on |
 | `HL7_BIND_ADDRESS` | `0.0.0.0` | address to bind |
+| `HL7_LOG_RAW` | `true` | log the message itself, segment by segment |
+| `HL7_LOG_SEGMENT_MAX` | `300` | characters kept per segment before truncation |
+| `HL7_LOG_MAX_SEGMENTS` | `40` | segments printed before the rest are summarised |
+
+### On logging the raw message
+
+Seeing the actual segments is most of why anyone tails this, so it is on by default:
+
+```
+message from 100.64.3.67:41870 type=MDM control-id=MSG-1789072408840 version=2.5 sender=V.ap/VERTAMA
+  raw: 6 segments, 4289 chars
+    MSH|^~\&|V.ap|VERTAMA|ORBIS|UKSH|20260910205855||MDM^T02^MDM_T02|MSG-…|P|2.5|||AL|NE|DEU
+    EVN|T02|20260910205855
+    PID|1||4321
+    PV1|1||||||||||||||||||1234
+    TXA|1|V.ap Report|PDF|||||20260910205855||||DEMO-20260910|ELIM||||DEMO.pdf
+    OBX|1|ED|||DEMO.pdf^application^pdf^Base64^5THRoGpeuO/1FZos9lOysh…[+3750 chars]
+```
+
+Truncation is **per segment**, deliberately. Capping the whole message would drop the
+trailing segments, which are often the ones in question; capping each segment keeps the
+shape of the message intact and trims only what actually floods a terminal, which in
+practice is one OBX carrying a base64 PDF.
+
+Note what this means where it runs: message content, patient identifiers included, ends
+up in the pod log. That is fine for test traffic and less fine for a production endpoint
+rerouted here for debugging — and since one simulator serves every environment,
+`HL7_LOG_RAW=false` is a cluster-wide switch, not a per-environment one.
 
 It accepts any HL7 version (`acceptAnyVersion`). A test receiver that rejects a message
 on MSH-12 is testing the wrong thing, and the library refuses to start without either
