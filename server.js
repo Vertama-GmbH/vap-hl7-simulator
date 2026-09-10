@@ -11,8 +11,14 @@
  *    and refuses to start without one — which is exactly what broke the upstream demo
  *    server we replaced.
  *
- *  - Every message is logged with the fields you actually need mid-debug: control ID,
- *    type, version, and length. Logs are the only output this thing has; nothing is
+ *  - A connection is logged only once it carries data. Kubernetes probes this port with
+ *    a TCP socket, connecting and closing a millisecond later without sending anything.
+ *    A probe and a client must not look alike in a log someone is tailing precisely to
+ *    find out whether the client connected at all.
+ *
+ *  - Every message is logged with the fields you need mid-debug — control ID, type,
+ *    version, sender — and the peer address, which is how you tell dev from prod when
+ *    one simulator serves both. Logs are the only output this thing has; nothing is
  *    stored, and there is no API to ask it what it received.
  */
 
@@ -23,13 +29,21 @@ const BIND = process.env.HL7_BIND_ADDRESS ?? '0.0.0.0'
 
 const stamp = () => new Date().toISOString()
 const log = (...parts) => console.log(stamp(), ...parts)
+const peerOf = (socket) => `${socket?.remoteAddress ?? '?'}:${socket?.remotePort ?? '?'}`
 
 const server = new Server({ bindAddress: BIND })
 
 const inbound = server.createInbound(
   { port: PORT, acceptAnyVersion: true },
   async (req, res) => {
-    let describe = 'unparsed'
+    let peer = '?'
+    try {
+      peer = peerOf(req.getSocket())
+    } catch {
+      // Socket already gone; the message is still worth reporting.
+    }
+
+    let describe
     try {
       const msg = req.getMessage()
       describe = [
@@ -43,14 +57,31 @@ const inbound = server.createInbound(
       // here would look identical to "nothing arrived".
       describe = `unreadable (${err.message})`
     }
-    log('message', describe)
+
+    log(`message from ${peer}`, describe)
     await res.sendResponse('AA')
   },
 )
 
+// Attaching our own listeners to the socket rather than logging on `client.connect`:
+// only a connection that actually sends a byte gets a line, so health probes stay
+// silent. Extra listeners do not consume the stream — the library still sees the data.
+inbound.on('client.connect', (socket) => {
+  const peer = peerOf(socket)
+  let spoke = false
+  // Prepended, because the library attached its own `data` listener first: without this
+  // its parse completes and logs the message before we log the connection that carried
+  // it, and the log reads backwards.
+  socket.prependOnceListener('data', () => {
+    spoke = true
+    log(`client connected ${peer}`)
+  })
+  socket.once('close', () => {
+    if (spoke) log(`client disconnected ${peer}`)
+  })
+})
+
 inbound.on('listen', () => log(`listening on ${BIND}:${PORT} — ACKs everything, stores nothing`))
-inbound.on('client.connect', () => log('client connected'))
-inbound.on('client.close', () => log('client disconnected'))
 inbound.on('client.error', (err) => log('client error:', err?.message ?? err))
 inbound.on('data.error', (err) => log('data error:', err?.message ?? err))
 inbound.on('error', (err) => log('server error:', err?.message ?? err))
